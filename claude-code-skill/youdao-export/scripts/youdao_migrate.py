@@ -21,7 +21,10 @@ import json
 import os
 import sys
 import re
+import time
 import argparse
+import configparser
+import oss2
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -52,6 +55,10 @@ def parse_args():
                    help="账号邮箱（默认自动检测第一个找到的账号目录）")
     p.add_argument("--output", default=None,
                    help="输出目录（默认 ~/Desktop/obsidian）")
+    p.add_argument("--oss", action="store_true", default=False,
+                   help="启用图片/附件上传到阿里云 OSS")
+    p.add_argument("--oss-prefix", default="youdao-notes",
+                   help="OSS 存储路径前缀（默认: youdao-notes）")
     return p.parse_args()
 
 
@@ -88,6 +95,101 @@ def detect_base_dir() -> Path:
 
 
 # ------------------------------------------------------------
+# OSS 配置
+# ------------------------------------------------------------
+MIME_EXT_MAP = {
+    "image/png": ".png",
+    "image/png;": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpeg;": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/webp;": ".webp",
+    "image/svg+xml": ".svg",
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/zip": ".zip",
+    "application/x-zip-compressed": ".zip",
+    "application/json": ".json",
+    "text/plain": ".txt",
+    "text/xml": ".xml",
+    "application/x-sh": ".sh",
+    "application/octet-stream": ".bin",
+}
+
+
+def load_oss_config() -> tuple:
+    """加载 OSS 配置：环境变量优先，fallback ~/.ossutilconfig，都无则报错退出
+    返回 (bucket_name, oss2.Bucket, endpoint)"""
+    bucket = os.environ.get("OSS_BUCKET", "")
+    ak = os.environ.get("OSS_ACCESS_KEY_ID", "")
+    sk = os.environ.get("OSS_ACCESS_KEY_SECRET", "")
+    endpoint = os.environ.get("OSS_ENDPOINT", "oss-cn-hangzhou.aliyuncs.com")
+
+    if not (bucket and ak and sk):
+        config_path = os.path.expanduser("~/.ossutilconfig")
+        if os.path.isfile(config_path):
+            try:
+                cp = configparser.ConfigParser()
+                cp.read(config_path)
+                ak = cp.get("Credentials", "accessKeyID", fallback="")
+                sk = cp.get("Credentials", "accessKeySecret", fallback="")
+                bucket = os.environ.get("OSS_BUCKET", cp.get("Credentials", "bucket", fallback=""))
+                endpoint = cp.get("Credentials", "endpoint", fallback="oss-cn-hangzhou.aliyuncs.com")
+            except Exception as e:
+                print(f"⚠ 读取 ~/.ossutilconfig 失败: {e}")
+
+    if not (bucket and ak and sk):
+        print("❌ OSS 配置未找到。请设置以下环境变量：")
+        print("   export OSS_BUCKET=your-bucket")
+        print("   export OSS_ACCESS_KEY_ID=your-ak")
+        print("   export OSS_ACCESS_KEY_SECRET=your-sk")
+        print("   export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com  # 可选")
+        print("   或配置 ~/.ossutilconfig 并设置 OSS_BUCKET 环境变量")
+        sys.exit(1)
+
+    auth = oss2.Auth(ak, sk)
+    endpoint_url = f"https://{endpoint}" if not endpoint.startswith("http") else endpoint
+    oss_bucket = oss2.Bucket(auth, endpoint_url, bucket)
+    return bucket, oss_bucket, endpoint
+
+
+def oss_upload(local_path: str, oss_path: str, oss_bucket) -> bool:
+    """使用 oss2 SDK 上传单个文件到 OSS，返回是否成功"""
+    if not os.path.isfile(local_path):
+        return False
+
+    for attempt in range(3):
+        try:
+            oss_bucket.put_object_from_file(oss_path.lstrip("/"), local_path)
+            return True
+        except oss2.exceptions.OssError as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                print(f"  ⚠ 上传失败: {e}")
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                print(f"  ⚠ 上传失败: {e}")
+    return False
+
+
+def get_ext_from_media_type(media_type: str) -> str:
+    """从 MIME 类型获取文件扩展名"""
+    if not media_type:
+        return ""
+    media_type = media_type.strip()
+    return MIME_EXT_MAP.get(media_type, ".bin")
+
+
+# ------------------------------------------------------------
 # 工具函数
 # ------------------------------------------------------------
 def sanitize_filename(name: str) -> str:
@@ -120,6 +222,15 @@ def pretty_date(timestamp_s: int) -> str:
 #   l=列表, q=引用, hr=分割线, tc=表格单元格
 # 内联样式（key "9" 数组）：b=加粗, i=斜体, s=删除线, u=下划线,
 #   c=文字颜色, fs=字号, li=链接, il=行内代码
+
+# Module-level OSS state (set by main() when --oss enabled)
+_oss_bucket = None       # oss2.Bucket instance
+_oss_bucket_name = ""
+_oss_endpoint = ""
+_oss_prefix = ""
+_url_cache = {}          # old_url → new_url
+_resource_map = {}       # resource_id → {path, mediaType, title}
+_oss_stats = {"uploaded": 0, "skipped": 0, "failed": 0, "cached": 0}
 
 def convert_inline(segments: list) -> str:
     """将内联内容片段数组转为 Markdown 行内文本"""
@@ -170,6 +281,54 @@ def convert_inline(segments: list) -> str:
     return "".join(result)
 
 
+def _resolve_image_url(original_url: str, alt_text: str) -> str:
+    """将图片 URL 转换为 OSS URL（上传后）；非 youdao 的直接返回原 URL"""
+    if not _oss_bucket or not original_url:
+        return original_url
+
+    if original_url in _url_cache:
+        _oss_stats["cached"] += 1
+        return _url_cache[original_url]
+
+    if "note.youdao.com" not in original_url:
+        return original_url
+
+    resource_id = original_url.rstrip("/").rsplit("/", 1)[-1]
+    info = _resource_map.get(resource_id)
+
+    if not info:
+        _oss_stats["skipped"] += 1
+        return original_url
+
+    local_path = info["path"]
+    if not os.path.isfile(local_path):
+        _oss_stats["skipped"] += 1
+        return original_url
+
+    title = info.get("title", "")
+    media_type = info.get("media_type", "")
+    ext = get_ext_from_media_type(media_type)
+    basename = resource_id
+    if title and title.strip():
+        safe_title = sanitize_filename(title.strip())
+        if "." in safe_title:
+            basename = os.path.splitext(safe_title)[0]
+        else:
+            basename = safe_title
+    filename = f"{resource_id}_{basename}{ext}"
+
+    oss_rel_path = f"{_oss_prefix}/{filename}"
+
+    if oss_upload(local_path, oss_rel_path, _oss_bucket):
+        new_url = f"https://{_oss_bucket_name}.{_oss_endpoint}/{oss_rel_path}"
+        _url_cache[original_url] = new_url
+        _oss_stats["uploaded"] += 1
+        return new_url
+    else:
+        _oss_stats["failed"] += 1
+        return original_url
+
+
 def convert_blocks(blocks: list, indent_level: int = 0) -> str:
     """递归转换 JSON block tree → Markdown 文本"""
     md_lines = []
@@ -203,7 +362,8 @@ def convert_blocks(blocks: list, indent_level: int = 0) -> str:
         elif block_type == "im":
             url = props.get("u", "")
             alt = convert_inline(inline) or "image"
-            md_lines.append(f"![{alt}]({url})")
+            resolved_url = _resolve_image_url(url, alt)
+            md_lines.append(f"![{alt}]({resolved_url})")
             md_lines.append("")
 
         elif block_type == "t":
@@ -295,17 +455,25 @@ def _convert_table(rows: list) -> list:
 
 
 def _extract_cell_text(cell: dict) -> str:
-    """提取表格单元格文本"""
+    """提取表格单元格文本（递归处理嵌套块结构）"""
     texts = []
+
+    def _collect_text(block: dict):
+        """递归收集 block 树中的所有文本"""
+        if not isinstance(block, dict):
+            return
+        for seg in (block.get("7") or []):
+            if isinstance(seg, dict) and "8" in seg:
+                t = seg["8"]
+                for fmt in (seg.get("9") or []):
+                    if isinstance(fmt, dict) and fmt.get("2") == "b":
+                        t = f"**{t}**"
+                texts.append(t)
+        for child in (block.get("5") or []):
+            _collect_text(child)
+
     for child in (cell.get("5") or []):
-        if isinstance(child, dict):
-            for seg in (child.get("7") or []):
-                if isinstance(seg, dict) and "8" in seg:
-                    t = seg["8"]
-                    for fmt in (seg.get("9") or []):
-                        if isinstance(fmt, dict) and fmt.get("2") == "b":
-                            t = f"**{t}**"
-                    texts.append(t)
+        _collect_text(child)
     return "".join(texts)
 
 
@@ -420,6 +588,31 @@ def main():
     main_cur = main_conn.cursor()
     content_conn = sqlite3.connect(str(content_db))
     content_cur = content_conn.cursor()
+
+    # ---- OSS 初始化 ----
+    global _oss_bucket, _oss_bucket_name, _oss_endpoint, _oss_prefix, _resource_map
+    if args.oss:
+        bucket_name, oss_bucket, endpoint = load_oss_config()
+        _oss_bucket = oss_bucket
+        _oss_bucket_name = bucket_name
+        _oss_endpoint = endpoint
+        _oss_prefix = args.oss_prefix.strip("/")
+
+        print(f"☁️  OSS 已启用: oss://{bucket_name}/{_oss_prefix}/")
+        print(f"   Endpoint: {endpoint}")
+
+        # 读取 resource 表，构建 resourceID → {path, mediaType, title} 映射
+        print("📦 读取资源缓存...")
+        resources = main_cur.execute(
+            "SELECT resourceID, entry, mediaType, title FROM resource WHERE entry IS NOT NULL AND entry != ''"
+        ).fetchall()
+        for rid, entry, mime, title in resources:
+            _resource_map[rid] = {
+                "path": entry,
+                "media_type": (mime or "").strip(),
+                "title": title or "",
+            }
+        print(f"   共 {len(_resource_map)} 个资源文件")
 
     print("📂 构建文件夹结构...")
     folder_paths = build_folder_tree(main_cur)
@@ -590,6 +783,14 @@ original_id: {file_id}
     print(f"    - 纯文本提取:         {stats['plain_text']} 篇")
     print()
     print(f"📁 输出路径: {output_dir}")
+    if args.oss:
+        print()
+        print("☁️  OSS 上传统计：")
+        print(f"    - 已上传:    {_oss_stats['uploaded']} 个")
+        print(f"    - 使用缓存:  {_oss_stats['cached']} 次")
+        print(f"    - 跳过:      {_oss_stats['skipped']} 个")
+        if _oss_stats['failed']:
+            print(f"    - 失败:      {_oss_stats['failed']} 个")
     print("=" * 60)
 
 

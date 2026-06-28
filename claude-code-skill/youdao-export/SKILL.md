@@ -1,7 +1,7 @@
 ---
 name: youdao-export
 description: 将有道云笔记 Mac 客户端本地数据导出为 Markdown 文件，适合导入 Obsidian。当用户提到「导出有道云笔记」「迁移有道云」「备份有道云」「有道云转 Markdown」「有道云转 Obsidian」「youdao export」时触发。
-compatibility: Python 3.9+, beautifulsoup4, macOS
+compatibility: Python 3.9+, beautifulsoup4, oss2, macOS
 ---
 
 # 有道云笔记 → Obsidian Markdown 导出
@@ -46,6 +46,8 @@ python3 scripts/youdao_migrate.py
 | `--account` | 账号邮箱 | 自动检测（第一个含 @ 的目录） |
 | `--output` | 输出目录 | `~/Desktop/obsidian` |
 | `--base-dir` | 有道云数据根目录 | 自动检测 `~/Library/Containers/ynote-desktop/...` |
+| `--oss` | 启用图片/附件上传到阿里云 OSS | 否 |
+| `--oss-prefix` | OSS 存储路径前缀 | `youdao-notes` |
 
 ### 示例
 
@@ -58,6 +60,13 @@ python3 scripts/youdao_migrate.py --account caesar@163.com --output ~/Documents/
 
 # 指定非默认数据目录
 python3 scripts/youdao_migrate.py --base-dir "/Volumes/Backup/ynote-desktop" --account user@example.com
+
+# 导出并上传图片到阿里云 OSS
+export OSS_BUCKET=your-bucket
+export OSS_ACCESS_KEY_ID=your-ak
+export OSS_ACCESS_KEY_SECRET=your-sk
+export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
+python3 scripts/youdao_migrate.py --oss --output ~/Documents/ObsidianVault
 ```
 
 ## 导出内容
@@ -86,8 +95,22 @@ original_id: 105676A0FB19461DA93ECCBF6F1C64B0
    - **search.db**（最后备用）
 4. 新版编辑器 JSON block 支持：标题、段落、表格、代码块、图片、列表、引用、分割线、加粗/斜体/链接/行内代码
 
+## OSS 图片上传
+
+启用 `--oss` 后，脚本会将笔记中的图片/附件上传到阿里云 OSS，并将 Markdown 中的 URL 替换为 OSS 公网地址。
+
+**凭证配置**（优先级从高到低）：
+1. 环境变量：`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`OSS_ENDPOINT`（可选，默认 `oss-cn-hangzhou.aliyuncs.com`）
+2. `~/.ossutilconfig` 文件（通过 `ossutil config` 生成）+ `OSS_BUCKET` 环境变量
+
+**工作原理**：
+- 从 `resource` 表读取有道云本地缓存的图片文件（~1971 个资源）
+- 识别 JSON block 中的图片 URL，提取 resourceID
+- 使用 oss2 Python SDK 上传到 OSS
+- 外链图片（非 `note.youdao.com` 域名）保持原样
+
 ## 依赖
 
 ```bash
-pip3 install beautifulsoup4
+pip3 install beautifulsoup4 oss2
 ```
