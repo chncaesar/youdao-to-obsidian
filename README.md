@@ -4,13 +4,13 @@
 
 ## 功能
 
-- ✅ 完整导出所有笔记（2290+ 篇）
+- ✅ 完整导出所有笔记（2285+ 篇）
 - ✅ 保留原有文件夹层级结构
 - ✅ 生成 YAML frontmatter（标题、创建日期、修改日期、原始 ID）
 - ✅ 新版编辑器 JSON block → Markdown（含表格、代码块、图片、列表、引用）
 - ✅ 旧版编辑器纯文本直接导出
+- ✅ 图片/附件上传到阿里云 OSS，替换为公网 URL
 - ✅ 支持命令行参数：账号、输出目录、数据目录
-- ✅ 自动检测 macOS 上有道云数据目录
 
 ## 依赖
 
@@ -18,7 +18,7 @@
 - macOS（有道云笔记 Mac 客户端）
 
 ```bash
-pip3 install beautifulsoup4
+pip3 install beautifulsoup4 oss2
 ```
 
 ## 快速使用
@@ -26,8 +26,8 @@ pip3 install beautifulsoup4
 ```bash
 git clone https://github.com/chncaesar/youdao-to-obsidian.git
 cd youdao-to-obsidian
-pip3 install beautifulsoup4
-python3 youdao_migrate.py
+pip3 install beautifulsoup4 oss2
+python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py
 ```
 
 默认输出到 `~/Desktop/obsidian/`，直接用 Obsidian 打开该目录即可。
@@ -35,8 +35,21 @@ python3 youdao_migrate.py
 ### 自定义参数
 
 ```bash
-python3 youdao_migrate.py --account your@email.com --output ~/Documents/MyVault
+python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --account your@email.com --output ~/Documents/MyVault
 ```
+
+### 图片上传到阿里云 OSS
+
+```bash
+export OSS_BUCKET=your-bucket
+export OSS_ACCESS_KEY_ID=your-ak
+export OSS_ACCESS_KEY_SECRET=your-sk
+export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com  # 可选
+
+python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --oss --output ~/Documents/MyVault
+```
+
+图片/附件会自动上传到 `oss://{bucket}/{oss-prefix}/`（默认前缀 `youdao-notes`），Markdown 中的 URL 替换为 OSS 公网地址。非有道云域名的外链图片保持原样。
 
 ## Claude Code 用户
 
