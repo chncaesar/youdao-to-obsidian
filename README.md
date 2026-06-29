@@ -1,6 +1,6 @@
 # Youdao to Obsidian
 
-将 [有道云笔记](https://note.youdao.com/) Mac 客户端本地数据导出为 Markdown 文件，可直接导入 [Obsidian](https://obsidian.md/) 使用。
+将 [有道云笔记](https://note.youdao.com/) 客户端本地数据导出为 Markdown 文件，可直接导入 [Obsidian](https://obsidian.md/) 使用。
 
 ## 功能
 
@@ -15,10 +15,10 @@
 ## 依赖
 
 - Python 3.9+
-- macOS（有道云笔记 Mac 客户端）
+- macOS / Linux（有道云笔记客户端）
 
 ```bash
-pip3 install beautifulsoup4 oss2
+pip3 install -r requirements.txt
 ```
 
 ## 快速使用
@@ -26,48 +26,49 @@ pip3 install beautifulsoup4 oss2
 ```bash
 git clone https://github.com/chncaesar/youdao-to-obsidian.git
 cd youdao-to-obsidian
-pip3 install beautifulsoup4 oss2
-python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py
-```
+pip3 install -r requirements.txt
 
-默认输出到 `~/Desktop/obsidian/`，直接用 Obsidian 打开该目录即可。
-
-### 自定义参数
-
-```bash
-python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --account your@email.com --output ~/Documents/MyVault
-```
-
-### 图片上传到阿里云 OSS
-
-```bash
+# 设置 OSS 环境变量（必选）
 export OSS_BUCKET=your-bucket
 export OSS_ACCESS_KEY_ID=your-ak
 export OSS_ACCESS_KEY_SECRET=your-sk
 export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com  # 可选
 
-python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --oss --output ~/Documents/MyVault
+python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --oss --output ~/Desktop/obsidian
 ```
 
-图片/附件会自动上传到 `oss://{bucket}/{oss-prefix}/`（默认前缀 `youdao-notes`），Markdown 中的 URL 替换为 OSS 公网地址。非有道云域名的外链图片保持原样。
+默认输出到 `~/Desktop/obsidian/`，直接用 Obsidian 打开该目录即可。`--oss` 为必选参数，笔记中的图片/附件会通过此配置上传到阿里云 OSS。
+
+### 自定义参数
+
+```bash
+python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --oss --account your@email.com --output ~/Documents/MyVault
+```
+
+### OSS 上传说明
+
+`--oss` 为必选参数。图片/附件会自动上传到 `oss://{bucket}/{oss-prefix}/`（默认前缀 `youdao-notes`），Markdown 中的 URL 替换为 OSS 公网地址。非有道云域名的外链图片保持原样。
 
 ## Claude Code 用户
 
-将 `claude-code-skill/youdao-export/` 目录复制到 `~/.claude/skills/`，之后对 Claude Code 说「导出有道云笔记」即可自动触发。
+将 `claude-code-skill/youdao-export/` 复制到技能目录：
+- Claude Code：`~/.claude/skills/`
+- OpenCode：`~/.config/opencode/skills/`
+
+之后对话中说「导出有道云笔记」即可自动触发。
 
 ## 数据目录说明
 
-有道云笔记 Mac 客户端的数据默认位于：
+有道云笔记客户端数据默认位于：
 
-```
-~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop/
-```
+- **Linux**：`~/.config/ynote-desktop/`
+- **macOS**：`~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop/`
 
 目录结构：
 
 ```
 ynote-desktop/
-├── <账号邮箱>/              # 如 caesar@163.com
+├── <账号邮箱>/              # 如 user@example.com
 │   └── ynote-data/
 │       ├── <账号>.db            # 主库（笔记元数据 + 文件夹树）
 │       ├── <账号>-content.db    # 内容库（笔记正文）

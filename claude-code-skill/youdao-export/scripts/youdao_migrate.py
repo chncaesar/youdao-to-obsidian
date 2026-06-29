@@ -7,7 +7,7 @@
 
 用法:
     python3 youdao_migrate.py
-    python3 youdao_migrate.py --account caesar@163.com
+     python3 youdao_migrate.py --account user@example.com
     python3 youdao_migrate.py --output ~/Desktop/obsidian
     python3 youdao_migrate.py --base-dir "/path/to/ynote-desktop"
 
@@ -24,7 +24,10 @@ import re
 import time
 import argparse
 import configparser
-import oss2
+from bs4 import BeautifulSoup
+import warnings
+from bs4 import XMLParsedAsHTMLWarning
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -32,9 +35,21 @@ from collections import defaultdict
 # ------------------------------------------------------------
 # 配置（可通过命令行参数覆盖）
 # ------------------------------------------------------------
-DEFAULT_BASE_DIR = Path(os.path.expanduser(
-    "~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop"
-))
+def _get_default_base_dir() -> Path:
+    if os.name == "posix":
+        candidates = [
+            Path(os.path.expanduser("~/.config/ynote-desktop")),
+            Path(os.path.expanduser(
+                "~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop"
+            )),
+        ]
+        for c in candidates:
+            if c.is_dir():
+                return c
+        return candidates[0]
+    return Path(os.path.expanduser("~/.config/ynote-desktop"))
+
+DEFAULT_BASE_DIR = _get_default_base_dir()
 
 
 def parse_args():
@@ -44,7 +59,7 @@ def parse_args():
         epilog="""
 示例:
   %(prog)s
-  %(prog)s --account caesar@163.com
+  %(prog)s --account user@example.com
   %(prog)s --output ~/Desktop/obsidian
   %(prog)s --base-dir "/path/to/ynote-desktop" --account my@email.com
         """
@@ -73,24 +88,21 @@ def detect_account(base_dir: Path) -> str:
 
 
 def detect_base_dir() -> Path:
-    """检测 macOS 上有道云笔记的数据目录"""
+    """自动检测有道云笔记的数据目录（macOS / Linux）"""
     candidates = [
-        # Mac App Store / 官方客户端
+        Path(os.path.expanduser("~/.config/ynote-desktop")),
         Path(os.path.expanduser(
             "~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop"
         )),
-        # 可能的备用路径
         Path(os.path.expanduser(
             "~/Library/Application Support/ynote-desktop"
         )),
     ]
     for c in candidates:
         if c.is_dir():
-            # 检查是否包含账号子目录
             for entry in c.iterdir():
                 if entry.is_dir() and "@" in entry.name and (entry / "ynote-data").is_dir():
                     return c
-    # 返回默认路径（即使不存在也让后面的检查报错）
     return candidates[0]
 
 
@@ -123,9 +135,9 @@ MIME_EXT_MAP = {
 }
 
 
-def load_oss_config() -> tuple:
-    """加载 OSS 配置：环境变量优先，fallback ~/.ossutilconfig，都无则报错退出
-    返回 (bucket_name, oss2.Bucket, endpoint)"""
+def load_oss_config() -> tuple | None:
+    """加载 OSS 配置：环境变量优先，fallback ~/.ossutilconfig
+    成功返回 (bucket_name, oss2.Bucket, endpoint)，失败返回 None"""
     bucket = os.environ.get("OSS_BUCKET", "")
     ak = os.environ.get("OSS_ACCESS_KEY_ID", "")
     sk = os.environ.get("OSS_ACCESS_KEY_SECRET", "")
@@ -145,14 +157,9 @@ def load_oss_config() -> tuple:
                 print(f"⚠ 读取 ~/.ossutilconfig 失败: {e}")
 
     if not (bucket and ak and sk):
-        print("❌ OSS 配置未找到。请设置以下环境变量：")
-        print("   export OSS_BUCKET=your-bucket")
-        print("   export OSS_ACCESS_KEY_ID=your-ak")
-        print("   export OSS_ACCESS_KEY_SECRET=your-sk")
-        print("   export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com  # 可选")
-        print("   或配置 ~/.ossutilconfig 并设置 OSS_BUCKET 环境变量")
-        sys.exit(1)
+        return None
 
+    import oss2
     auth = oss2.Auth(ak, sk)
     endpoint_url = f"https://{endpoint}" if not endpoint.startswith("http") else endpoint
     oss_bucket = oss2.Bucket(auth, endpoint_url, bucket)
@@ -503,12 +510,8 @@ def plain_text_to_markdown(text: str) -> str:
         return text
 
     if text.count("<") > 3 and text.count(">") > 3:
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(text, "html.parser")
-            return soup.get_text("\n", strip=True)
-        except Exception:
-            pass
+        soup = BeautifulSoup(text, "html.parser")
+        return soup.get_text("\n", strip=True)
 
     return text
 
@@ -592,7 +595,16 @@ def main():
     # ---- OSS 初始化 ----
     global _oss_bucket, _oss_bucket_name, _oss_endpoint, _oss_prefix, _resource_map
     if args.oss:
-        bucket_name, oss_bucket, endpoint = load_oss_config()
+        cfg = load_oss_config()
+        if cfg is None:
+            print("❌ OSS 配置未找到。请设置以下环境变量：")
+            print("   export OSS_BUCKET=your-bucket")
+            print("   export OSS_ACCESS_KEY_ID=your-ak")
+            print("   export OSS_ACCESS_KEY_SECRET=your-sk")
+            print("   export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com  # 可选")
+            print("   或配置 ~/.ossutilconfig 并设置 OSS_BUCKET 环境变量")
+            sys.exit(1)
+        bucket_name, oss_bucket, endpoint = cfg
         _oss_bucket = oss_bucket
         _oss_bucket_name = bucket_name
         _oss_endpoint = endpoint
@@ -613,6 +625,22 @@ def main():
                 "title": title or "",
             }
         print(f"   共 {len(_resource_map)} 个资源文件")
+    else:
+        rc = main_cur.execute(
+            "SELECT COUNT(*) FROM resource WHERE entry IS NOT NULL AND entry != ''"
+        ).fetchone()[0]
+        if rc > 0:
+            print()
+            print("❌ 笔记中包含图片/附件（约 {} 个），但未启用 OSS 上传。".format(rc))
+            print("   不使用 --oss 会导致 Markdown 中的图片链接指向有道云域名，离线不可用。")
+            print()
+            print("   请设置 OSS 环境变量后重新运行：")
+            print("     export OSS_BUCKET=your-bucket")
+            print("     export OSS_ACCESS_KEY_ID=your-ak")
+            print("     export OSS_ACCESS_KEY_SECRET=your-sk")
+            print("  然后执行:")
+            print("     python3 ... --oss")
+            sys.exit(1)
 
     print("📂 构建文件夹结构...")
     folder_paths = build_folder_tree(main_cur)

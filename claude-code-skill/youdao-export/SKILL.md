@@ -1,7 +1,7 @@
 ---
 name: youdao-export
 description: 将有道云笔记 Mac 客户端本地数据导出为 Markdown 文件，适合导入 Obsidian。当用户提到「导出有道云笔记」「迁移有道云」「备份有道云」「有道云转 Markdown」「有道云转 Obsidian」「youdao export」时触发。
-compatibility: Python 3.9+, beautifulsoup4, oss2, macOS
+compatibility: Python 3.9+, beautifulsoup4, oss2, macOS / Linux
 ---
 
 # 有道云笔记 → Obsidian Markdown 导出
@@ -10,16 +10,15 @@ compatibility: Python 3.9+, beautifulsoup4, oss2, macOS
 
 ## 数据目录定位
 
-macOS 上有道云笔记的数据默认位于：
+脚本会自动检测数据目录。各平台默认路径：
 
-```
-~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop/
-```
+- **Linux**：`~/.config/ynote-desktop/`
+- **macOS**：`~/Library/Containers/ynote-desktop/Data/Library/Application Support/ynote-desktop/`
 
-目录结构：
+目录结构（两个平台一致）：
 ```
 ynote-desktop/
-├── <账号邮箱>/          # 如 caesar@163.com
+├── <账号邮箱>/          # 如 user@example.com
 │   └── ynote-data/
 │       ├── <账号>.db           # 主库（笔记元数据 + 文件夹树）
 │       ├── <账号>-content.db   # 内容库（笔记正文）
@@ -29,7 +28,7 @@ ynote-desktop/
     └── Databases.db
 ```
 
-如果数据不在默认路径（如使用了不同版本的有道云客户端），可以用 `find ~/Library -name "ynote-desktop" -type d 2>/dev/null` 查找。
+如果数据不在默认路径，使用 `--base-dir` 手动指定。Linux 上从其他机器迁移数据时同样通过 `--base-dir` 指向拷贝后的目录。
 
 ## 执行导出
 
@@ -45,28 +44,30 @@ python3 scripts/youdao_migrate.py
 |------|------|--------|
 | `--account` | 账号邮箱 | 自动检测（第一个含 @ 的目录） |
 | `--output` | 输出目录 | `~/Desktop/obsidian` |
-| `--base-dir` | 有道云数据根目录 | 自动检测 `~/Library/Containers/ynote-desktop/...` |
+| `--base-dir` | 有道云数据根目录 | 自动检测（Linux: `~/.config/ynote-desktop`，macOS: `~/Library/Containers/...`） |
 | `--oss` | 启用图片/附件上传到阿里云 OSS | 否 |
 | `--oss-prefix` | OSS 存储路径前缀 | `youdao-notes` |
 
 ### 示例
 
 ```bash
-# 默认导出（自动检测账号，输出到 ~/Desktop/obsidian）
-python3 scripts/youdao_migrate.py
-
-# 指定账号和输出目录
-python3 scripts/youdao_migrate.py --account caesar@163.com --output ~/Documents/ObsidianVault
-
-# 指定非默认数据目录
-python3 scripts/youdao_migrate.py --base-dir "/Volumes/Backup/ynote-desktop" --account user@example.com
-
-# 导出并上传图片到阿里云 OSS
+# 设置 OSS 环境变量（必选）
 export OSS_BUCKET=your-bucket
 export OSS_ACCESS_KEY_ID=your-ak
 export OSS_ACCESS_KEY_SECRET=your-sk
-export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
-python3 scripts/youdao_migrate.py --oss --output ~/Documents/ObsidianVault
+export OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com  # 可选
+
+# 默认导出（自动检测账号，输出到 ~/Desktop/obsidian）
+python3 scripts/youdao_migrate.py --oss
+
+# 指定账号和输出目录
+python3 scripts/youdao_migrate.py --oss --account user@example.com --output ~/Documents/ObsidianVault
+
+# 指定非默认数据目录
+python3 scripts/youdao_migrate.py --oss --base-dir "/Volumes/Backup/ynote-desktop" --account user@example.com
+
+# Linux：从其他机器拷贝数据到当前机器后导出
+python3 scripts/youdao_migrate.py --oss --base-dir /work/youdao-backups --account user@example.com --output /work/obsidian
 ```
 
 ## 导出内容
@@ -79,7 +80,7 @@ title: "笔记标题"
 create_date: 2020-09-30
 modify_date: 2020-09-30
 source: youdao
-original_id: 105676A0FB19461DA93ECCBF6F1C64B0
+original_id: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01
 ---
 ```
 
