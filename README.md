@@ -49,6 +49,8 @@ python3 claude-code-skill/youdao-export/scripts/youdao_migrate.py --oss --accoun
 
 `--oss` 为必选参数。图片/附件会自动上传到 `oss://{bucket}/{oss-prefix}/`（默认前缀 `youdao-notes`），Markdown 中的 URL 替换为 OSS 公网地址。非有道云域名的外链图片保持原样。
 
+> **注意**：有道云本地缓存并非全部图片的完整副本。客户端仅下载近期访问过的图片/附件，大量历史图片的本地文件可能缺失。`resource` 表中的记录数量不等于实际可上传数量。
+
 ## Claude Code 用户
 
 将 `claude-code-skill/youdao-export/` 复制到技能目录：
