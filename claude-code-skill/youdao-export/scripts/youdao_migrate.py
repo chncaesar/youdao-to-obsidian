@@ -541,7 +541,12 @@ def build_folder_tree(main_cursor) -> dict:
             folder_paths[fid] = path
             traverse(fid, path)
 
-    traverse("1", "")
+    # 动态找虚拟根节点：parentId 不在任何 fileId 中的就是虚拟根的子节点，
+    # 收集所有这样的 parentId 作为遍历起点，而不是写死 "1"
+    all_file_ids = set(folder_map.keys())
+    virtual_roots = {pid for _, _, pid in folders if pid not in all_file_ids and pid}
+    for root_pid in virtual_roots:
+        traverse(root_pid, "")
 
     for fid in folder_map:
         if fid not in folder_paths:
